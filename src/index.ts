@@ -1,19 +1,17 @@
 import { serve } from "bun";
-import indexHtml from "./index.html" with { type: "text" };
+import { join } from "path";
 
 const server = serve({
   port: 3000,
-
   async fetch(req) {
     const url = new URL(req.url);
 
-    // 1. API Proxy
+    // 1. WordPress Headless API Proxy
     if (url.pathname === "/api/tours") {
       try {
-        const wpUrl = "https://southethiopiatours.com/wp-json/wp/v2/posts?_embed&per_page=12";
-        const wpResponse = await fetch(wpUrl);
-        const posts: any[] = await wpResponse.json();
-        const tours = posts.map((post) => ({
+        const wpResponse = await fetch("https://southethiopiatours.com/wp-json/wp/v2/posts?_embed&per_page=12");
+        const posts = await wpResponse.json();
+        const tours = posts.map((post: any) => ({
           title: post.title.rendered.replace(/&#8211;/g, "–").replace(/&#038;/g, "&"),
           category: post._embedded?.["wp:term"]?.[0]?.[0]?.name || "Tour",
           image: post._embedded?.["wp:featuredmedia"]?.[0]?.source_url || "https://images.unsplash.com/photo-1523805081730-6144a778a9c0?q=80&w=800",
@@ -26,22 +24,43 @@ const server = serve({
       }
     }
 
-    // 2. Serve Frontend Assets (Fixes the 404 for frontend.tsx)
-    const filePath = "." + url.pathname;
-    const file = Bun.file(filePath);
-    if (await file.exists()) {
-      return new Response(file);
+    // 2. YOUR TRANSPILER BLOCK (Directly integrated)
+    if (url.pathname.endsWith(".tsx") || url.pathname.endsWith(".ts")) {
+      const filePath = join(process.cwd(), url.pathname);
+      const file = Bun.file(filePath);
+
+      if (await file.exists()) {
+        const result = await Bun.build({
+          entrypoints: [filePath],
+          target: "browser",
+          format: "esm",
+          splitting: false,
+        });
+
+        return new Response(result.outputs[0], {
+          headers: { "Content-Type": "application/javascript" },
+        });
+      }
     }
 
-    // 3. Serve the HTML at root
+    // 3. Serve index.html from root
     if (url.pathname === "/" || url.pathname === "/index.html") {
-      return new Response(indexHtml, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+      const htmlFile = Bun.file("./index.html");
+      if (await htmlFile.exists()) {
+        return new Response(htmlFile, {
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+    }
+
+    // 4. Static Fallback (CSS, images)
+    const staticFile = Bun.file("." + url.pathname);
+    if (await staticFile.exists()) {
+      return new Response(staticFile);
     }
 
     return new Response("Not Found", { status: 404 });
   },
 });
 
-console.log(`🚀 Server running at http://localhost:${server.port}`);
+console.log(`🚀 Server with Bun.build running at http://localhost:${server.port}`);
